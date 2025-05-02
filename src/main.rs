@@ -1,6 +1,7 @@
 use std::env;
 use std::fs;
 use std::io::{self, Write};
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 fn main() {
@@ -22,11 +23,11 @@ fn main() {
         }
 
         history.push(input.to_string());
-        run_command(input);
+        run_command(input, &history);
     }
 }
 
-fn run_command(input: &str) {
+fn run_command(input: &str, history: &[String]) {
     let parts: Vec<&str> = input.trim().split_whitespace().collect();
     if parts.is_empty() {
         return;
@@ -44,7 +45,14 @@ fn run_command(input: &str) {
                     eprintln!("cd: {}", e);
                 }
             } else {
-                eprintln!("cd: missing operand");
+                // If no directory is specified, change to home directory
+                if let Ok(home) = env::var("HOME").or_else(|_| env::var("USERPROFILE")) {
+                    if let Err(e) = env::set_current_dir(&home) {
+                        eprintln!("cd: Failed to change to home directory: {}", e);
+                    }
+                } else {
+                    eprintln!("cd: Home directory not found");
+                }
             }
         }
 
@@ -54,16 +62,90 @@ fn run_command(input: &str) {
             io::stdout().flush().unwrap();
         }
 
-        "ls" => {
+        "clear" => {
+            // Clear screen for Windows and ANSI terminals (alias for cls)
+            print!("{esc}[2J{esc}[1;1H", esc = 27 as char);
+            io::stdout().flush().unwrap();
+        }
+
+        "ls" | "dir" => {
             let path = args.first().unwrap_or(&".");
             match fs::read_dir(path) {
                 Ok(entries) => {
                     for entry in entries.flatten() {
-                        println!("{}", entry.file_name().to_string_lossy());
+                        let metadata = match entry.metadata() {
+                            Ok(meta) => meta,
+                            Err(_) => continue,
+                        };
+                        let file_type = if metadata.is_dir() { "DIR" } else { "FILE" };
+                        let size = if metadata.is_file() { metadata.len() } else { 0 };
+                        println!("{:4} {:8} {}", file_type, size, entry.file_name().to_string_lossy());
                     }
                 }
                 Err(e) => eprintln!("ls: {}", e),
             }
+        }
+
+        "pwd" => {
+            println!("{}", env::current_dir().unwrap().display());
+        }
+
+        "history" => {
+            for (i, cmd) in history.iter().enumerate() {
+                println!("{}: {}", i + 1, cmd);
+            }
+        }
+
+        "touch" => {
+            if let Some(filename) = args.first() {
+                if let Err(e) = fs::File::create(filename) {
+                    eprintln!("touch: {}", e);
+                }
+            } else {
+                eprintln!("touch: missing file operand");
+            }
+        }
+
+        "mkdir" => {
+            if let Some(dirname) = args.first() {
+                if let Err(e) = fs::create_dir_all(dirname) {
+                    eprintln!("mkdir: {}", e);
+                }
+            } else {
+                eprintln!("mkdir: missing directory operand");
+            }
+        }
+
+        "cat" => {
+            if let Some(filename) = args.first() {
+                match fs::read_to_string(filename) {
+                    Ok(content) => println!("{}", content),
+                    Err(e) => eprintln!("cat: {}", e),
+                }
+            } else {
+                eprintln!("cat: missing file operand");
+            }
+        }
+
+        "rm" => {
+            if let Some(path) = args.first() {
+                let path = Path::new(path);
+                if path.is_dir() {
+                    if let Err(e) = fs::remove_dir_all(path) {
+                        eprintln!("rm: {}", e);
+                    }
+                } else {
+                    if let Err(e) = fs::remove_file(path) {
+                        eprintln!("rm: {}", e);
+                    }
+                }
+            } else {
+                eprintln!("rm: missing operand");
+            }
+        }
+
+        "echo" => {
+            println!("{}", args.join(" "));
         }
 
         _ => {
